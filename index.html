@@ -1,0 +1,722 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>DocLens — PDF RAG Highlighter</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet"/>
+<style>
+  :root {
+    --bg: #0d0d0f;
+    --surface: #161618;
+    --surface2: #1e1e21;
+    --border: rgba(255,255,255,0.07);
+    --border-hover: rgba(255,255,255,0.15);
+    --accent: #f0e040;
+    --accent-dim: rgba(240,224,64,0.12);
+    --accent-dim2: rgba(240,224,64,0.06);
+    --text: #f0efe8;
+    --text-muted: #7a7975;
+    --text-dim: #3a3a38;
+    --found: #4ade80;
+    --found-bg: rgba(74,222,128,0.08);
+    --partial: #fb923c;
+    --partial-bg: rgba(251,146,60,0.08);
+    --notfound: #f87171;
+    --notfound-bg: rgba(248,113,113,0.08);
+    --mono: 'DM Mono', monospace;
+    --sans: 'DM Sans', sans-serif;
+    --display: 'Syne', sans-serif;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 15px;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(255,255,255,0.015) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.015) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  header {
+    position: relative;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 1.25rem 2rem;
+    border-bottom: 1px solid var(--border);
+    background: rgba(13,13,15,0.9);
+    backdrop-filter: blur(12px);
+  }
+
+  .logo {
+    font-family: var(--display);
+    font-size: 1.35rem;
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    color: var(--text);
+  }
+  .logo span { color: var(--accent); }
+
+  .status-pill {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-muted);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    padding: 6px 14px;
+    border-radius: 100px;
+  }
+  .status-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--text-dim);
+    transition: background 0.3s;
+  }
+  .status-dot.ready { background: var(--found); box-shadow: 0 0 6px var(--found); }
+  .status-dot.loading { background: var(--accent); animation: pulse 1s infinite; }
+
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+  .layout {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    grid-template-columns: 380px 1fr;
+    height: calc(100vh - 65px);
+  }
+
+  .left-panel {
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .panel-section {
+    padding: 1.5rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .section-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 1rem;
+  }
+
+  .upload-zone {
+    border: 1px dashed var(--border-hover);
+    border-radius: 12px;
+    padding: 2rem 1.5rem;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.2s;
+    background: var(--accent-dim2);
+    position: relative;
+    overflow: hidden;
+  }
+  .upload-zone:hover, .upload-zone.drag-over {
+    border-color: var(--accent);
+    background: var(--accent-dim);
+  }
+  .upload-zone input[type="file"] {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    cursor: pointer;
+  }
+  .upload-icon { font-size: 2rem; margin-bottom: 0.75rem; display: block; }
+  .upload-title {
+    font-family: var(--display);
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 0.4rem;
+  }
+  .upload-sub { font-size: 12px; color: var(--text-muted); }
+
+  .file-info {
+    display: none;
+    align-items: center;
+    gap: 10px;
+    padding: 0.85rem 1rem;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-top: 0.75rem;
+  }
+  .file-info.visible { display: flex; }
+  .file-name {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--accent);
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .file-badge {
+    font-size: 10px;
+    font-family: var(--mono);
+    padding: 3px 8px;
+    border-radius: 4px;
+    background: var(--found-bg);
+    color: var(--found);
+  }
+
+  .btn-upload {
+    width: 100%;
+    margin-top: 0.75rem;
+    padding: 0.75rem;
+    background: var(--accent);
+    color: #0d0d0f;
+    border: none;
+    border-radius: 8px;
+    font-family: var(--display);
+    font-size: 0.9rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.15s;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+  }
+  .btn-upload:hover { filter: brightness(1.1); transform: translateY(-1px); }
+  .btn-upload:active { transform: translateY(0); }
+  .btn-upload.visible { display: flex; }
+  .btn-upload:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+  .query-wrap {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    padding: 1.5rem;
+    gap: 0.75rem;
+    overflow: hidden;
+  }
+
+  textarea#question {
+    flex: 1;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 14px;
+    line-height: 1.6;
+    padding: 1rem;
+    resize: none;
+    transition: border 0.2s;
+    min-height: 100px;
+  }
+  textarea#question:focus { outline: none; border-color: var(--accent); }
+  textarea#question::placeholder { color: var(--text-dim); }
+
+  .btn-query {
+    padding: 0.85rem;
+    background: var(--surface2);
+    border: 1px solid var(--border-hover);
+    border-radius: 8px;
+    color: var(--text);
+    font-family: var(--display);
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+  }
+  .btn-query:hover { border-color: var(--accent); color: var(--accent); }
+  .btn-query:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  /* ── Verdict result strip ── */
+  .verdict-strip {
+    display: none;
+    align-items: center;
+    justify-content: space-between;
+    padding: 1rem 1.5rem;
+    border-top: 1px solid var(--border);
+    gap: 12px;
+  }
+  .verdict-strip.visible { display: flex; }
+
+  .verdict-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 7px 16px;
+    border-radius: 100px;
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.06em;
+  }
+  .verdict-FOUND   { background: var(--found-bg);    color: var(--found);    border: 1px solid rgba(74,222,128,0.25); }
+  .verdict-PARTIAL { background: var(--partial-bg);  color: var(--partial);  border: 1px solid rgba(251,146,60,0.25); }
+  .verdict-NOT     { background: var(--notfound-bg); color: var(--notfound); border: 1px solid rgba(248,113,113,0.25); }
+
+  .verdict-icon { font-size: 14px; }
+
+  .btn-download {
+    padding: 6px 14px;
+    background: transparent;
+    border: 1px solid var(--border-hover);
+    border-radius: 6px;
+    color: var(--text-muted);
+    font-family: var(--mono);
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.15s;
+    white-space: nowrap;
+  }
+  .btn-download:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* ── Right panel ── */
+  .right-panel {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: var(--surface);
+  }
+
+  .pdf-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.85rem 1.5rem;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
+  }
+  .pdf-toolbar-left {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+  .page-nav { display: flex; align-items: center; gap: 8px; }
+  .page-btn {
+    width: 28px; height: 28px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 14px;
+    transition: all 0.15s;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .page-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .page-info { font-family: var(--mono); font-size: 11px; color: var(--text-muted); }
+
+  .pdf-viewer {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 2rem;
+  }
+
+  .pdf-placeholder {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    gap: 1rem;
+    text-align: center;
+    width: 100%;
+  }
+  .pdf-placeholder-icon { font-size: 3rem; opacity: 0.3; }
+  .pdf-placeholder-text { font-family: var(--display); font-size: 1.1rem; font-weight: 600; color: var(--text-muted); }
+  .pdf-placeholder-sub { font-size: 13px; color: var(--text-dim); }
+
+  #pdf-pages { display: none; width: 100%; }
+  #pdf-pages.visible { display: block; }
+
+  .loading-bar {
+    height: 2px;
+    background: var(--accent);
+    width: 0%;
+    transition: width 0.3s;
+    position: fixed;
+    top: 0; left: 0;
+    z-index: 999;
+  }
+
+  .toast {
+    position: fixed;
+    bottom: 2rem; right: 2rem;
+    padding: 0.85rem 1.25rem;
+    border-radius: 10px;
+    font-family: var(--mono);
+    font-size: 12px;
+    z-index: 1000;
+    transform: translateY(100px);
+    opacity: 0;
+    transition: all 0.3s cubic-bezier(0.34,1.56,0.64,1);
+    max-width: 320px;
+  }
+  .toast.show { transform: translateY(0); opacity: 1; }
+  .toast.success { background: var(--found-bg);    color: var(--found);    border: 1px solid rgba(74,222,128,0.3); }
+  .toast.error   { background: var(--notfound-bg); color: var(--notfound); border: 1px solid rgba(248,113,113,0.3); }
+  .toast.info    { background: var(--surface2);    color: var(--text-muted); border: 1px solid var(--border); }
+
+  .spinner {
+    width: 14px; height: 14px;
+    border: 2px solid rgba(0,0,0,0.2);
+    border-top-color: #0d0d0f;
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    display: none;
+  }
+  .spinner.visible { display: block; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .url-section {
+    padding: 1rem 1.5rem;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .url-input {
+    flex: 1;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-muted);
+    font-family: var(--mono);
+    font-size: 11px;
+    padding: 6px 10px;
+  }
+  .url-input:focus { outline: none; border-color: var(--accent); color: var(--text); }
+  .url-label { font-family: var(--mono); font-size: 10px; color: var(--text-dim); white-space: nowrap; }
+  .btn-set-url {
+    padding: 6px 12px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-muted);
+    font-family: var(--mono);
+    font-size: 11px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.15s;
+  }
+  .btn-set-url:hover { border-color: var(--accent); color: var(--accent); }
+
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border-hover); border-radius: 4px; }
+
+  @media (max-width: 768px) {
+    .layout { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+    .left-panel { max-height: 60vh; }
+  }
+</style>
+</head>
+<body>
+
+<div class="loading-bar" id="loading-bar"></div>
+
+<header>
+  <div class="logo">Doc<span>Lens</span></div>
+  <div class="status-pill">
+    <div class="status-dot" id="status-dot"></div>
+    <span id="status-text">not connected</span>
+  </div>
+</header>
+
+<div class="layout">
+
+  <div class="left-panel">
+
+    <div class="url-section">
+      <span class="url-label">API</span>
+      <input class="url-input" id="api-url" type="text" placeholder="https://xxxx.ngrok.io" />
+      <button class="btn-set-url" onclick="setApiUrl()">Connect</button>
+    </div>
+
+    <div class="panel-section">
+      <div class="section-label">01 — Upload PDF</div>
+      <div class="upload-zone" id="upload-zone">
+        <input type="file" id="file-input" accept=".pdf" onchange="onFileSelected(event)"/>
+        <span class="upload-icon">⬆</span>
+        <div class="upload-title">Drop PDF here</div>
+        <div class="upload-sub">or click to browse</div>
+      </div>
+      <div class="file-info" id="file-info">
+        <span class="file-name" id="file-name">—</span>
+        <span class="file-badge" id="file-badge">ready</span>
+      </div>
+      <button class="btn-upload" id="btn-upload" onclick="uploadPDF()">
+        <span id="upload-btn-text">Index PDF</span>
+        <div class="spinner" id="upload-spinner"></div>
+      </button>
+    </div>
+
+    <div class="query-wrap">
+      <div class="section-label">02 — Ask a Question</div>
+      <textarea id="question" placeholder="What is the main topic of this document?&#10;&#10;Ask anything about your PDF..."></textarea>
+      <button class="btn-query" id="btn-query" onclick="runQuery()" disabled>
+        <span id="query-btn-text">Search Document</span>
+        <div class="spinner" id="query-spinner"></div>
+      </button>
+    </div>
+
+    <!-- Verdict only — no explanation/evidence/scores -->
+    <div class="verdict-strip" id="verdict-strip">
+      <div id="verdict-badge"></div>
+      <button class="btn-download" id="btn-download" onclick="downloadPDF()">↓ Download</button>
+    </div>
+
+  </div>
+
+  <div class="right-panel">
+    <div class="pdf-toolbar">
+      <div class="pdf-toolbar-left">
+        <span id="pdf-title">No document loaded</span>
+      </div>
+      <div class="page-nav">
+        <button class="page-btn" onclick="prevPage()">‹</button>
+        <span class="page-info" id="page-info">— / —</span>
+        <button class="page-btn" onclick="nextPage()">›</button>
+      </div>
+    </div>
+    <div class="pdf-viewer">
+      <div class="pdf-placeholder" id="pdf-placeholder">
+        <div class="pdf-placeholder-icon">⬜</div>
+        <div class="pdf-placeholder-text">No document loaded</div>
+        <div class="pdf-placeholder-sub">Upload a PDF to get started</div>
+      </div>
+      <div id="pdf-pages"></div>
+    </div>
+  </div>
+
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+let API_URL = localStorage.getItem('doclens_api') || '';
+let selectedFile = null;
+let pdfPages = [];
+let currentPage = 0;
+let isIndexed = false;
+
+function apiFetch(path, options = {}) {
+  const headers = { 'ngrok-skip-browser-warning': 'true', ...(options.headers || {}) };
+  return fetch(`${API_URL}${path}`, { ...options, headers });
+}
+
+window.onload = () => {
+  if (API_URL) {
+    document.getElementById('api-url').value = API_URL;
+    checkHealth();
+  }
+  const zone = document.getElementById('upload-zone');
+  zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag-over'); });
+  zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
+  zone.addEventListener('drop', e => {
+    e.preventDefault();
+    zone.classList.remove('drag-over');
+    const f = e.dataTransfer.files[0];
+    if (f && f.type === 'application/pdf') loadFile(f);
+    else showToast('Only PDF files are supported', 'error');
+  });
+  document.getElementById('question').addEventListener('keydown', e => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') runQuery();
+  });
+};
+
+function setApiUrl() {
+  const val = document.getElementById('api-url').value.trim().replace(/\/$/, '');
+  if (!val) { showToast('Enter your ngrok URL first', 'error'); return; }
+  API_URL = val;
+  localStorage.setItem('doclens_api', API_URL);
+  checkHealth();
+}
+
+async function checkHealth() {
+  setStatus('loading', 'connecting...');
+  try {
+    const r = await apiFetch('/health');
+    const d = await r.json();
+    if (d.status === 'ok') {
+      setStatus('ready', d.indexed ? `indexed: ${d.pdf}` : 'connected');
+      if (d.indexed) { isIndexed = true; document.getElementById('btn-query').disabled = false; }
+    }
+  } catch {
+    setStatus('', 'unreachable');
+    showToast('Cannot reach API. Check your ngrok URL.', 'error');
+  }
+}
+
+function onFileSelected(e) { const f = e.target.files[0]; if (f) loadFile(f); }
+
+function loadFile(f) {
+  selectedFile = f;
+  document.getElementById('file-info').classList.add('visible');
+  document.getElementById('file-name').textContent = f.name;
+  document.getElementById('file-badge').textContent = `${(f.size/1024).toFixed(0)} KB`;
+  document.getElementById('btn-upload').classList.add('visible');
+  document.getElementById('pdf-title').textContent = f.name;
+}
+
+async function uploadPDF() {
+  if (!selectedFile || !API_URL) { showToast('Set your API URL first', 'error'); return; }
+  setUploadLoading(true);
+  setProgress(20);
+  const form = new FormData();
+  form.append('pdf', selectedFile);
+  try {
+    setProgress(50);
+    const r = await apiFetch('/upload', { method: 'POST', body: form });
+    const d = await r.json();
+    setProgress(100);
+    if (r.ok) {
+      isIndexed = true;
+      document.getElementById('btn-query').disabled = false;
+      document.getElementById('file-badge').textContent = `${d.chunks} chunks`;
+      setStatus('ready', `indexed: ${selectedFile.name}`);
+      showToast(`✓ Indexed ${d.chunks} chunks`, 'success');
+      loadPDFPreview(selectedFile);
+    } else {
+      showToast(d.error || 'Upload failed', 'error');
+    }
+  } catch { showToast('Upload failed — check API connection', 'error'); }
+  finally { setUploadLoading(false); setTimeout(() => setProgress(0), 600); }
+}
+
+function loadPDFPreview(file) { renderPDFFromUrl(URL.createObjectURL(file), false); }
+
+async function renderPDFFromUrl(url, isHighlighted) {
+  const container = document.getElementById('pdf-pages');
+  container.innerHTML = '';
+  document.getElementById('pdf-placeholder').style.display = 'none';
+  container.classList.add('visible');
+  const embed = document.createElement('embed');
+  embed.src = url;
+  embed.type = 'application/pdf';
+  embed.style.cssText = 'width:100%; height:calc(100vh - 130px); border-radius:8px; border:1px solid var(--border);';
+  container.appendChild(embed);
+  document.getElementById('page-info').textContent = isHighlighted ? 'highlighted' : 'original';
+  document.getElementById('pdf-title').textContent = isHighlighted ? '★ highlighted result' : (selectedFile ? selectedFile.name : 'document');
+}
+
+async function runQuery() {
+  const question = document.getElementById('question').value.trim();
+  if (!question) { showToast('Enter a question first', 'error'); return; }
+  if (!isIndexed) { showToast('Upload and index a PDF first', 'error'); return; }
+  if (!API_URL)   { showToast('Set your API URL first', 'error'); return; }
+
+  setQueryLoading(true);
+  setProgress(20);
+  document.getElementById('verdict-strip').classList.remove('visible');
+
+  try {
+    setProgress(50);
+    const r = await apiFetch('/query', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question })
+    });
+    const d = await r.json();
+    setProgress(90);
+    if (r.ok) {
+      showVerdict(d.verdict || 'UNKNOWN');
+      setProgress(100);
+      loadHighlightedPDF();
+    } else {
+      showToast(d.error || 'Query failed', 'error');
+    }
+  } catch { showToast('Query failed — check API connection', 'error'); }
+  finally { setQueryLoading(false); setTimeout(() => setProgress(0), 600); }
+}
+
+function showVerdict(verdict) {
+  const strip = document.getElementById('verdict-strip');
+  strip.classList.add('visible');
+
+  const vClass = verdict.includes('NOT') ? 'NOT' : verdict.includes('PARTIAL') ? 'PARTIAL' : 'FOUND';
+  const icons = { FOUND: '✓', PARTIAL: '~', NOT: '✗' };
+  document.getElementById('verdict-badge').innerHTML =
+    `<span class="verdict-badge verdict-${vClass}"><span class="verdict-icon">${icons[vClass]}</span>${verdict}</span>`;
+}
+
+async function loadHighlightedPDF() {
+  try {
+    const r = await apiFetch('/download');
+    const blob = await r.blob();
+    renderPDFFromUrl(URL.createObjectURL(blob), true);
+    showToast('Highlighted PDF loaded', 'success');
+  } catch { showToast('Could not load highlighted PDF', 'error'); }
+}
+
+async function downloadPDF() {
+  try {
+    const r = await apiFetch('/download');
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'highlighted.pdf'; a.click();
+    URL.revokeObjectURL(url);
+  } catch { showToast('Download failed', 'error'); }
+}
+
+function prevPage() { if (currentPage > 0) { currentPage--; showPage(currentPage); } }
+function nextPage() { if (currentPage < pdfPages.length - 1) { currentPage++; showPage(currentPage); } }
+function showPage(n) { document.getElementById('page-info').textContent = `${n+1} / ${pdfPages.length}`; }
+
+function setStatus(state, text) {
+  document.getElementById('status-dot').className = 'status-dot' + (state ? ` ${state}` : '');
+  document.getElementById('status-text').textContent = text;
+}
+function setProgress(pct) { document.getElementById('loading-bar').style.width = pct + '%'; }
+
+function setUploadLoading(on) {
+  document.getElementById('btn-upload').disabled = on;
+  document.getElementById('upload-spinner').classList.toggle('visible', on);
+  document.getElementById('upload-btn-text').textContent = on ? 'Indexing...' : 'Index PDF';
+}
+function setQueryLoading(on) {
+  document.getElementById('btn-query').disabled = on;
+  document.getElementById('query-spinner').classList.toggle('visible', on);
+  document.getElementById('query-btn-text').textContent = on ? 'Searching...' : 'Search Document';
+}
+
+let toastTimer;
+function showToast(msg, type = 'info') {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = `toast ${type} show`;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 3500);
+}
+</script>
+</body>
+</html>
